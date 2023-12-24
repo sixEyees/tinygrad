@@ -12,6 +12,8 @@ def fuzz_plus():
   backup = m.sts[0]
   m.sts.append(ShapeTracker.from_shape(m.sts[0].shape))
   for _ in range(4): random.choice(shapetracker_ops)(m)
+  print(f'vm2 ----> {backup}')
+  print(f'vm1 ----> {m.sts[1]}')
   st_sum = backup + m.sts[1]
   return m.sts[0], st_sum
 
@@ -27,7 +29,7 @@ def fuzz_invert():
   return start, st_sum
 
 if __name__ == "__main__":
-  # random.seed(42)
+  random.seed(42)
   total = getenv("CNT", 1000)
   for fuzz in [globals()[f'fuzz_{x}'] for x in getenv("FUZZ", "invert,plus").split(",")]:
     for _ in trange(total, desc=f"{fuzz}"):

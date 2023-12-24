@@ -5,6 +5,7 @@ from tinygrad.shape.shapetracker import ShapeTracker
 from test.external.fuzz_shapetracker import shapetracker_ops
 from test.external.fuzz_shapetracker import do_permute, do_reshape_split_one, do_reshape_combine_two, do_flip, do_pad
 from test.unit.test_shapetracker_math import st_equal, MultiShapeTracker
+from tinygrad.shape.view import _merge_dims, strides_for_shape
 
 def fuzz_plus():
   m = MultiShapeTracker([ShapeTracker.from_shape((random.randint(1, 10), random.randint(1, 10), random.randint(1, 10)))])
@@ -14,6 +15,11 @@ def fuzz_plus():
   for _ in range(4): random.choice(shapetracker_ops)(m)
   print(f'vm2 ----> {backup}')
   print(f'vm1 ----> {m.sts[1]}')
+  p = _merge_dims(backup.views[-1].shape, backup.views[-1].strides)
+  e = _merge_dims(m.sts[1].views[-1].shape, m.sts[1].views[-1].strides)
+  print(p)
+  print(e)
+  print(strides_for_shape(m.sts[1].views[-1].shape))
   st_sum = backup + m.sts[1]
   return m.sts[0], st_sum
 
@@ -39,4 +45,4 @@ if __name__ == "__main__":
         print(f"EXP: {st1}")
         print(f"GOT: {st2}")
         print(colored("****", "green" if eq else "red"))
-      if not eq: exit(0)
+      #if not eq: exit(0)

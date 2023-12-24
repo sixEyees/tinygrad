@@ -28,9 +28,9 @@ def st_equal(st1, st2) -> bool:
     st1_v = sym_infer(st1_valid, {idx: i})
     st2_v = sym_infer(st2_valid, {idx: i})
     if st1_v != st2_v or (st1_off != st2_off and st1_v):
-      print(f"ST MISMATCH @ {i}, {st1_v=} != {st2_v=}, {st1_off=} != {st2_off=}")
-      print(st1)
-      print(st2)
+      #print(f"ST MISMATCH @ {i}, {st1_v=} != {st2_v=}, {st1_off=} != {st2_off=}")
+      #print(st1)
+      #print(st2)
       return False
   return True
 

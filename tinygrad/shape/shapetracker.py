@@ -60,7 +60,6 @@ def dist(coord1, coord2, shape):
   dist = abs(sum((c2-c1) * s for c1, c2, s in zip(coord1, coord2, strides_for_shape(shape))))
   return dist
 
-
 @functools.lru_cache(maxsize=None)
 def merge_views(vm2:View, vm1:View) -> Optional[View]:
   if vm1.contiguous and vm1.shape == vm2.shape: return vm2

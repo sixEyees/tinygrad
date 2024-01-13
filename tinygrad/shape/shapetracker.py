@@ -43,6 +43,25 @@ def un1d(shape:Tuple[sint, ...], offs:sint) -> List[sint]:
     offs -= here * stride
   return result
 
+def get_mask_edges(org, mask):
+  #the coordinate of the first mask element closest to the projected origin
+  mask_org =  [org[i] + b if org[i] < b else org[i] - e if org[i] > e else org[i] for i, (b, e) in enumerate(mask)]
+  #calculating ending coordinate of the mask of each dim
+  mask_ends = [mask_org[:] for _ in range(len(mask_org))]
+  for i ,(b, e) in enumerate(mask):
+    if org[i] > e:
+      mask_ends[i][i] = b-1
+    else:
+      mask_ends[i][i] = e
+  return mask_org, mask_ends
+
+#get distance between two coordinates
+def dist(coord1, coord2, shape):
+  dist = abs(sum((c2-c1) * s for c1, c2, s in zip(coord1, coord2, strides_for_shape(shape))))
+  return dist
+
+def project_mask():
+  pass
 @functools.lru_cache(maxsize=None)
 def merge_views(vm2:View, vm1:View) -> Optional[View]:
   if vm1.contiguous and vm1.shape == vm2.shape: return vm2
@@ -52,18 +71,24 @@ def merge_views(vm2:View, vm1:View) -> Optional[View]:
   if vm1.mask and vm2.mask:                                                                         
     new_mask = vm1.mask                                                                             
     vm1off = vm1.offset + sum(b * s for (b,_), s in zip(vm1.mask, vm1.strides))                     
-    print(f'{vm1off=}')                                                                             
+    #print(f'{vm1off=}')                                                                             
     origin = un1d(vm2.shape, vm1off)                                                                
-    print(f'{origin=}')                                                                             
+    print(f'{origin=}')
+    mask_org, mask_ends = get_mask_edges(origin, vm2.mask)
+    print(f'{mask_org=}')
+    print(f'{mask_ends=}')
+    projected_origin = [b for (b,_) in vm1.mask]
+    print(f'{projected_origin=}')
+
     strides: List[sint] = [0] * len(vm1.shape)                                                      
     for d1, st in enumerate(vm1.strides):                                                           
       if st == 0: continue                                                                          
       for d2, (o, s1) in enumerate(zip(origin, un1d(vm2.shape, vm1off + st))):                      
         if (s1 := s1 - o) == 0: continue                                                            
         strides[d1] += s1 * vm2.strides[d2]                                                         
-      offset = sum(o * s for o, s in zip(origin, vm2.strides)) + vm2.offset - sum(b * s for (b,_), s in zip(vm1.mask, strides))                                                                             
-      print(f'strides ----- {strides}')                                                               
-      print(f'offset ----- {offset}')    
+    offset = sum(o * s for o, s in zip(origin, vm2.strides)) + vm2.offset - sum(b * s for (b,_), s in zip(vm1.mask, strides))                                                                             
+    print(f'{strides=}')                                                               
+    print(f'{offset=}')    
   #return View.create(vm1.shape, cast(Tuple[sint, ...], strides), vm2.offset, vm1.mask)
 
 def simplify(views:Tuple[View, ...]) -> Tuple[View, ...]:

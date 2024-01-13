@@ -6,7 +6,7 @@ from typing import Tuple, List, Optional, Dict, Set, cast, Union, Iterable
 from tinygrad.ops import MovementOps
 from tinygrad.helpers import prod, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable, MulNode, Node, SumNode, NumNode, sint
-from tinygrad.shape.view import View, _merge_dims
+from tinygrad.shape.view import View, _merge_dims, strides_for_shape
 
 def expr_node_mask(view:View, idx:Node, valid:Optional[Node]=None) -> Node:
   expr = [valid] if valid is not None else []
@@ -34,13 +34,37 @@ def expr_idxs(view:View, idxs:Tuple[Node, ...]) -> Node:
   assert len(idxs) == len(view.shape), f"need an idx for all dimensions {idxs} vs {view.shape}"
   return Node.sum([NumNode(view.offset) if isinstance(view.offset, int) else view.offset] + [idx*st for idx,sh,st in zip(idxs, view.shape, view.strides) if sh != 1 and st != 0])  # noqa: E501
 
+def un1d(shape:Tuple[sint, ...], offs:sint) -> List[sint]:
+  strides = strides_for_shape(shape)
+  result = []
+  for stride in strides:
+    here = offs // stride if stride else 0
+    result.append(here)
+    offs -= here * stride
+  return result
+
 @functools.lru_cache(maxsize=None)
 def merge_views(vm2:View, vm1:View) -> Optional[View]:
   if vm1.contiguous and vm1.shape == vm2.shape: return vm2
   if vm2.contiguous: return vm1
-  if vm2.mask or vm1.offset != 0: return None  # this isn't supported yet
-  if None in (strides := ShapeTracker((vm2, vm1)).real_strides()): return None
-  return View.create(vm1.shape, cast(Tuple[sint, ...], strides), vm2.offset, vm1.mask)
+  if not vm2.mask and vm1.offset == 0 and None not in (rstrides := ShapeTracker((vm2, vm1)).real_strides()):
+    return View.create(vm1.shape, cast(Tuple[sint, ...], rstrides), vm2.offset, vm1.mask)
+  if vm1.mask and vm2.mask:                                                                         
+    new_mask = vm1.mask                                                                             
+    vm1off = vm1.offset + sum(b * s for (b,_), s in zip(vm1.mask, vm1.strides))                     
+    print(f'{vm1off=}')                                                                             
+    origin = un1d(vm2.shape, vm1off)                                                                
+    print(f'{origin=}')                                                                             
+    strides: List[sint] = [0] * len(vm1.shape)                                                      
+    for d1, st in enumerate(vm1.strides):                                                           
+      if st == 0: continue                                                                          
+      for d2, (o, s1) in enumerate(zip(origin, un1d(vm2.shape, vm1off + st))):                      
+        if (s1 := s1 - o) == 0: continue                                                            
+        strides[d1] += s1 * vm2.strides[d2]                                                         
+      offset = sum(o * s for o, s in zip(origin, vm2.strides)) + vm2.offset - sum(b * s for (b,_), s in zip(vm1.mask, strides))                                                                             
+      print(f'strides ----- {strides}')                                                               
+      print(f'offset ----- {offset}')    
+  #return View.create(vm1.shape, cast(Tuple[sint, ...], strides), vm2.offset, vm1.mask)
 
 def simplify(views:Tuple[View, ...]) -> Tuple[View, ...]:
   if len(views) >= 2 and (new_view := merge_views(views[-2], views[-1])) is not None: return simplify(views[:-2] + (new_view,))

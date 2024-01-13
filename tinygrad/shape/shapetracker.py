@@ -60,8 +60,7 @@ def dist(coord1, coord2, shape):
   dist = abs(sum((c2-c1) * s for c1, c2, s in zip(coord1, coord2, strides_for_shape(shape))))
   return dist
 
-def project_mask():
-  pass
+
 @functools.lru_cache(maxsize=None)
 def merge_views(vm2:View, vm1:View) -> Optional[View]:
   if vm1.contiguous and vm1.shape == vm2.shape: return vm2
@@ -88,7 +87,10 @@ def merge_views(vm2:View, vm1:View) -> Optional[View]:
         strides[d1] += s1 * vm2.strides[d2]                                                         
     offset = sum(o * s for o, s in zip(origin, vm2.strides)) + vm2.offset - sum(b * s for (b,_), s in zip(vm1.mask, strides))                                                                             
     print(f'{strides=}')                                                               
-    print(f'{offset=}')    
+    print(f'{offset=}')  
+
+    #
+
   #return View.create(vm1.shape, cast(Tuple[sint, ...], strides), vm2.offset, vm1.mask)
 
 def simplify(views:Tuple[View, ...]) -> Tuple[View, ...]:

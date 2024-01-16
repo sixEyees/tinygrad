@@ -41,6 +41,11 @@ def _loadop(op, shape:Tuple[sint,...], dtype:DType, device:Union[str, Tuple[str,
   if isinstance(device, str): return LazyBuffer.loadop(op, shape, dtype, device, arg, src)
   return MultiLazyBuffer([LazyBuffer.loadop(op, shape, dtype, d, arg, src) for d in device], None)
 
+def _fromcpu(x: np.ndarray) -> LazyBuffer:
+  ret = LazyBuffer.loadop(LoadOps.EMPTY, x.shape, dtypes.from_np(x.dtype), "CPU")
+  ret.realized = Buffer("CPU", prod(x.shape), dtypes.from_np(x.dtype), x.flatten())
+  return ret
+
 Scalar = Union[float, int, bool]
 
 class Tensor:
@@ -68,17 +73,17 @@ class Tensor:
     self._ctx: Optional[Function] = None
     if isinstance(data, LazyBuffer): assert dtype is None or dtype == data.dtype, "dtype doesn't match, and casting isn't supported"
     elif isinstance(data, get_args(Scalar)): data = _loadop(LoadOps.CONST, tuple(), dtype or dtypes.from_py(data), device, data)
-    elif isinstance(data, bytes): data = LazyBuffer.fromCPU(np.frombuffer(data, np.uint8))
+    elif isinstance(data, bytes): data = _fromcpu(np.frombuffer(data, np.uint8))
     elif data is None: data = _loadop(LoadOps.EMPTY, (0,), dtype or dtypes.default_float, device)
     elif isinstance(data, list):
       if (d := fully_flatten(data)) and all(isinstance(s, bool) for s in d): dtype = dtype or dtypes.bool
       elif d and all_int(d): dtype = dtype or dtypes.default_int
       else: dtype = dtype or dtypes.default_float
       # NOTE: cast at the end for the dtypes that do not have a numpy dtype
-      data = LazyBuffer.fromCPU(np.array(data, dtype.np)).cast(dtype)
+      data = _fromcpu(np.array(data, dtype.np)).cast(dtype)
     elif isinstance(data, np.ndarray):
       if data.shape == (): data = _loadop(LoadOps.CONST, tuple(), dtype or dtypes.from_np(data.dtype), device, data.item())
-      else: data = LazyBuffer.fromCPU(data.astype(dtype.np) if dtype is not None and dtype.np is not None else data)
+      else: data = _fromcpu(data.astype(dtype.np) if dtype is not None and dtype.np is not None else data)
 
     # data is a LazyBuffer, but it might be on the wrong device
     if not isinstance(data, (LazyBuffer, MultiLazyBuffer)): raise RuntimeError(f"can't create Tensor from {data!r} with type {type(data)}")
@@ -133,31 +138,36 @@ class Tensor:
     return self
   def detach(self) -> Tensor: return Tensor(self.lazydata, device=self.device, requires_grad=False)
 
-  # TODO: these are good places to start removing numpy
+  def _data(self) -> memoryview:
+    if 0 in self.shape: return memoryview(bytearray(0))
+    t = self if isinstance(self.device, str) else self.to("CPU")   # deal with multitensor
+    return cast(Buffer, t.cast(t.dtype.scalar()).contiguous().realize().lazydata.base.realized).as_buffer()
+
+  def data(self) -> memoryview:
+    assert self.dtype.fmt is not None, f"no fmt dtype for {self.dtype}"
+    assert all_int(self.shape), f"no data if shape is symbolic, {self.shape=}"
+    return self._data().cast(self.dtype.fmt, self.shape if len(self.shape) else (1,))
   def item(self) -> Scalar:
+    assert self.dtype.fmt is not None, f"no fmt dtype for {self.dtype}"
     assert self.numel() == 1, "must have one element for item"
-    return cast(Buffer, self.contiguous().realize().lazydata.base.realized).toCPU().item()
-  def data(self) -> memoryview: return self.numpy().data
-
-  # TODO: this should import numpy and use .data() to construct the array
+    return self._data().cast(self.dtype.fmt)[0]
   def numpy(self) -> np.ndarray:
-    assert all_int(self.shape), f"no numpy if shape is symbolic, {self.shape=}"
-    assert self.dtype.np is not None, f"no numpy dtype for {self.dtype}"
-    if 0 in self.shape: return np.zeros(self.shape, dtype=self.dtype.np)
-    t = self if isinstance(self.device, str) else self.to("CPU")
-    return t.cast(self.dtype.scalar()).contiguous().realize().lazydata.base.realized.toCPU().astype(self.dtype.np, copy=True).reshape(self.shape)
+    assert self.dtype.np is not None, f"no np dtype for {self.dtype}"
+    assert all_int(self.shape), f"no data if shape is symbolic, {self.shape=}"
+    return np.frombuffer(self._data(), dtype=self.dtype.np).reshape(self.shape)
 
-  def to(self, device:Optional[str]) -> Tensor:
+  def to(self, device:Optional[Union[str, Tuple[str, ...]]]) -> Tensor:
     if device is None or device == self.device: return self
+    if not isinstance(device, str): return self.shard(device)
     ret = Tensor(self.lazydata, device)
     if self.grad: ret.grad = self.grad.to(device)
     return ret
 
-  def to_(self, device:Optional[str]):
-    if device is None or device == self.device: return
-    if self.grad: self.grad = self.grad.to_(device)
-    _ret = Tensor(self.lazydata, device)
-    self.lazydata = _ret.lazydata
+  def to_(self, device:Optional[Union[str, Tuple[str, ...]]]):
+    real = self.to(device)
+    # TODO: is this assign?
+    if self.grad is not None and real.grad is not None: self.grad.lazydata = real.grad.lazydata
+    self.lazydata = real.lazydata
 
   def shard(self, devices:Tuple[str, ...], axis:Optional[int]=None) -> Tensor:
     assert isinstance(self.lazydata, LazyBuffer), "can't shard a MultiLazyBuffer"
@@ -262,14 +272,13 @@ class Tensor:
   # ***** toposort and backward pass *****
 
   def deepwalk(self):
-    def _deepwalk(node, visited, nodes):
+    def _deepwalk(node, visited):
       visited.add(node)
       if getattr(node, "_ctx", None):
         for i in node._ctx.parents:
-          if i not in visited: _deepwalk(i, visited, nodes)
-        nodes.append(node)
-      return nodes
-    return _deepwalk(self, set(), [])
+          if i not in visited: yield from _deepwalk(i, visited)
+        yield node
+    return list(_deepwalk(self, set()))
 
   def backward(self) -> Tensor:
     assert self.shape == tuple(), f"backward can only be called for scalar tensors, but it has shape {self.shape})"
@@ -279,7 +288,7 @@ class Tensor:
     self.grad = Tensor(1.0, device=self.device, requires_grad=False)
 
     for t0 in reversed(self.deepwalk()):
-      assert (t0.grad is not None)
+      if t0.grad is None: raise RuntimeError("tensor has no grad")
       grads = t0._ctx.backward(t0.grad.lazydata)
       grads = [Tensor(g, device=self.device, requires_grad=False) if g is not None else None
         for g in ([grads] if len(t0._ctx.parents) == 1 else grads)]
@@ -537,10 +546,12 @@ class Tensor:
     assert all_int(self.shape), "does not support symbolic shape"
     out = self.sum(axis=axis, keepdim=keepdim)
     return out.mul(prod(out.shape)/prod(self.shape)) if 0 not in self.shape else out
-  def std(self, axis=None, keepdim=False, correction=1):
+  def var(self, axis=None, keepdim=False, correction=1):
     assert all_int(self.shape), "does not support symbolic shape"
     square_sum = ((self - self.mean(axis=axis, keepdim=True)).square()).sum(axis=axis, keepdim=keepdim)
-    return square_sum.div(prod(self.shape)/prod(square_sum.shape)-correction).sqrt()
+    return square_sum.div(prod(self.shape)/prod(square_sum.shape)-correction)
+  def std(self, axis=None, keepdim=False, correction=1): return self.var(axis, keepdim, correction).sqrt()
+
   def _softmax(self, axis):
     m = self - self.max(axis=axis, keepdim=True)
     e = m.exp()

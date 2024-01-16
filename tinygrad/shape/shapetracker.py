@@ -53,12 +53,25 @@ def get_mask_edges(org, mask):
       mask_ends[i][i] = b-1
     else:
       mask_ends[i][i] = e
-  return mask_org, mask_ends
+  return [mask_org, *mask_ends]
 
 #get distance between two coordinates
 def dist(coord1, coord2, shape):
   dist = abs(sum((c2-c1) * s for c1, c2, s in zip(coord1, coord2, strides_for_shape(shape))))
   return dist
+
+def add_dist(coord, dist, shape, eq_dim0):
+  to_add = dist
+  temp = [0]*len(coord)
+  for i in range(len(coord)):
+    if i == 0: 
+      temp[-1] = coord[-1] + (to_add%shape[-1])
+      if temp[-1] != shape[-1] or eq_dim0: temp[-1] %= shape[-1]
+    if i != 0 and i != len(coord)-1:
+      temp[-(i+1)] = (coord[-(i+1)] + (to_add%shape[-(i+1)]))%shape[-(i+1)]
+    elif i == len(coord)-1: temp[-(i+1)] = coord[-(i+1)] + to_add
+    to_add //= shape[-(i+1)]
+  return temp 
 
 @functools.lru_cache(maxsize=None)
 def merge_views(vm2:View, vm1:View) -> Optional[View]:
@@ -72,9 +85,8 @@ def merge_views(vm2:View, vm1:View) -> Optional[View]:
     #print(f'{vm1off=}')                                                                             
     origin = un1d(vm2.shape, vm1off)                                                                
     print(f'{origin=}')
-    mask_org, mask_ends = get_mask_edges(origin, vm2.mask)
-    print(f'{mask_org=}')
-    print(f'{mask_ends=}')
+    mask_edges = get_mask_edges(origin, vm2.mask)
+    print(f'{mask_edges=}')
     projected_origin = [b for (b,_) in vm1.mask]
     print(f'{projected_origin=}')
 
@@ -87,8 +99,15 @@ def merge_views(vm2:View, vm1:View) -> Optional[View]:
     offset = sum(o * s for o, s in zip(origin, vm2.strides)) + vm2.offset - sum(b * s for (b,_), s in zip(vm1.mask, strides))                                                                             
     print(f'{strides=}')                                                               
     print(f'{offset=}')  
-
-    #
+    new_mask_edges = []
+    #origin ----> projected_origin
+    dists = [dist(origin, mask_edges[i], vm2.shape) for i in range(len(origin)+1)]
+    for i, d in enumerate(dists):
+        new_mask_edges.append(add_dist(projected_origin, d, (*vm1.shape[0:-1],vm2.shape[-1]), vm1.shape[-1]==vm2.shape[-1]))
+    
+    print(new_mask_edges)
+    
+    print(f'{dists=}')
 
   #return View.create(vm1.shape, cast(Tuple[sint, ...], strides), vm2.offset, vm1.mask)
 
